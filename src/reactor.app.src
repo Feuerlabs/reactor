@@ -1,0 +1,7 @@
+{application, reactor,
+ [{description, "Reactor core"},
+  {vsn, "1.0"},
+  {modules, [reactor]},
+  {registered, []},
+  {applications,[kernel,stdlib]}
+ ]}.

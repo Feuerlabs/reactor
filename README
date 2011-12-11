@@ -1,0 +1,101 @@
+Reactor core
+
+A reactor is a process that receives input on form:
+
+  {reactor_signal,Src,SrcField,Field,Value}
+
+Where Src is an other reactor or undefined if sent from any process.
+SrcField is the originating field when sent from a connected channel.
+
+This event, trigger event handlers to evaluate and set output 
+fields which in turn send reactor signals on connected outputs.
+
+A reactor process consists of fields and event handlers.
+A field may be assigned any value either by assign it in the event handler
+using assign(Field, Value) or set(Field, Value) or set(self(),Field,Value)
+Any field in one reactor may be connected to one or several fields
+in other reactors. This makes the value propagtion automatic.
+
+Example:
+
+    Pid = reactor:create(
+      name,
+      [
+        {x,1},  %% x::integer()
+        {y,2}   %% y::integer()
+      ],
+
+      [
+        {id1, 10, x, [x,y], fun(X,Y) -> X+Y end},
+	{id2, 20, @exit, [y],   fun(0) -> normal; (_) -> false }
+      ]).
+
+This reactor has two fields x and y wih the default values 1 and 2 respectivily.
+The create of the reactor can the use reactor:set(Pid,x,2) to make
+the reactor trigger the first script (because x is in the input list) and
+evaluate a new x value to X+Y = 2+2 = 4.
+An other example is to call reactor:set(Pid,y,0) this will trigger the
+reactor script number 20 that will set the special field @exit to normal
+and will effectivly exit the reactor with reason normal.
+
+Standard field in a reactor core:
+
+@id :: atom()
+    Name of reactor "class"
+
+@init :: void()
+    Set only when reactor is create and can / should be used
+    as constructor. A @init constructor must be given as:
+       {constructor, 1, [a,b,c], ['@init'],
+       		     fun(_) -> initialize() end}
+    The important thing here is that the input fields are ['@init'] to
+    trigger on '@init'.
+    
+@terminate :: void()
+    A reactor destructor, trigger before reactor terminates. For example
+    after @exit has been set.
+
+@exit :: atom() 
+    Stop object when set.
+
+@auto_exit :: boolean()
+    Allow reactor to be terminated  - when available.
+
+@dump :: boolean()
+    Debug print all fields.
+
+@add_field :: atom()|{atom(),term()}
+    Add a dynamic field to the reactor.
+
+@del_field  :: atom() 
+    Delete a field from a reactor (even @del_field can be deleted)
+
+@add_handler :: handler()
+    Add a dynamic handler to the reactor.
+
+@del_handler :: identifier() 
+    Delete a handler from a reactor.
+
+@connect    :: {atom(),pid(),atom()}
+    Connect a field to an other reactor field.
+	
+@disconnect :: {atom(),pid(),atom()}
+    Disconnect a field.
+
+@child :: void()
+    used to connect @parent in children.
+    The {channel,'@child'} is used to get the list of children
+
+@parent :: void()
+    store 'parent'.
+    
+@event :: term()
+    Set when an event a message that is not on form:
+
+    {reactor_signal,Src,SrcField,Field,Value}
+
+    is received by the reactor.
+
+@error_handler :: term()
+    Set when an error is detect in a destination reactor, when for example
+    a reactor tries to send a value to a non existing field.
