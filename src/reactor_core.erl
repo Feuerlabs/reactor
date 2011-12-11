@@ -273,20 +273,20 @@ add_handlers_([H|Handlers],Dict) ->
 add_handlers_([], Dict) ->
     Dict.
 
-add_handler_(H={ID,Prio,OFs,IFs,Body},Dict) ->
+add_handler_(H={Hid,Prio,OFs,IFs,Body},Dict) ->
     ?dbg("add handler: ~w\n", [H]),
     case {fields_not_present(OFs,Dict),fields_not_present(IFs,Dict)} of
 	{[],[]} ->
 	    N = length(IFs),
 	    if is_function(Body,N) ->
-		    case dict:find({handler,ID},Dict) of
+		    case dict:find({handler,Hid},Dict) of
 			error ->
-			    Dict1 = dict:store({handler,ID},H,Dict),
-			    add_field_handlers_(IFs,{Prio,ID},Dict1);
-			{ok,{ID,Prio0,_OFs0,IFs0,_Body0}} ->
-			    Dict1 = dict:store({handler,ID},H,Dict),
-			    Dict2 = del_field_handlers_(IFs0,{Prio0,ID},Dict1),
-			    add_field_handlers_(IFs,{Prio,ID},Dict2)
+			    Dict1 = dict:store({handler,Hid},H,Dict),
+			    add_field_handlers_(IFs,{Prio,Hid},Dict1);
+			{ok,{Hid,Prio0,_OFs0,IFs0,_Body0}} ->
+			    Dict1 = dict:store({handler,Hid},H,Dict),
+			    Dict2 = del_field_handlers_(IFs0,{Prio0,Hid},Dict1),
+			    add_field_handlers_(IFs,{Prio,Hid},Dict2)
 		    end;
 	       true ->
 		    io:format("~w[~s]: error: reactor body is not a function/~w\n",
@@ -303,18 +303,18 @@ add_handler_(H,Dict) ->
 	      [self(),id(Dict),H]),
     Dict.
 
-del_handler_(ID) ->
-    Dict = del_handler_(ID, get(?REACTOR_DICT)),
+del_handler_(Hid) ->
+    Dict = del_handler_(Hid, get(?REACTOR_DICT)),
     put(?REACTOR_DICT, Dict),
     Dict.
 
-del_handler_(ID, Dict) ->
-    case dict:find({handler,ID},Dict) of
+del_handler_(Hid, Dict) ->
+    case dict:find({handler,Hid},Dict) of
 	error ->
 	    Dict;
 	{ok,{_,Prio0,_,IFs0,_}} ->
-	    Dict1 = dict:erase({handler,ID},Dict),
-	    del_field_handlers_(IFs0,{Prio0,ID},Dict1)
+	    Dict1 = dict:erase({handler,Hid},Dict),
+	    del_field_handlers_(IFs0,{Prio0,Hid},Dict1)
     end.
 
 add_field_handlers_([F|Fs], PrioID, Dict) ->    
