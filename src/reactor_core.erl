@@ -18,8 +18,10 @@
 %% Handler = {ID,Prio,IFs,OFs,Body}
 %%
 
--export([enter_loop/3]).
--export([get_value/1, assign_value/2]).
+-export([enter_loop/2]).
+-export([fields/0, handlers/0]).
+
+-export([get_value/1, set_value/2]).
 -export([is_reactor/0, current_handler/0]).
 -export([reactors_channel/1]).
 
@@ -28,7 +30,7 @@
 -define(REACTOR_DICT,    '_REACTOR@DICT_').
 -define(REACTOR_HANDLER, '_REACTOR@HANDLER_').
 
--define(debug, true).
+%% -define(debug, true).
 
 -ifdef(debug).
 -define(dbg(F,As), io:format((F),As)).
@@ -36,40 +38,94 @@
 -define(dbg(F,As), ok).
 -endif.
 
-%%
-%% Enter reactor main loop
-%%
+%% FIXME: import instead
+%% -type void() :: 'ok'.
+%% -type reactor() :: pid().
+-type handler_id() :: term().
+-type handler_prio() :: term().
+-type field_name() :: atom().
+-type field_decl() :: field_name() | {field_name(), term()}.
+-type handler() :: {Hid::handler_id(),Prio::handler_prio(),
+		    OFs::'void' | field_name() | [field_name()],
+		    IFs::[field_name()], Body::fun()}.
 
-enter_loop(ID, FieldValues, Handlers) ->
-    Dict0 = dict:new(),
-    Dict1 = lists:foldl(
-	      fun(FieldValue, Dict11) ->
-		      {_,Dict12} = add_field_(FieldValue, Dict11),
-		      Dict12
-	      end, Dict0,
-	      [{'@id',ID},
-	       {'@exit',false},
-	       {'@auto_exit',false},
-	       {'@dump',false},
-	       '@child','@parent',
-	       '@init', '@terminate',  %% init / termination script 
-	       '@add_field','@del_field',
-	       '@connect', '@disconnect',
-	       '@add_handler', '@del_handler',
-	       '@event', '@error_handler'
-	       | FieldValues]),
-    Dict2 = add_handlers_([add_field_handler(),
-			   del_field_handler(),
-			   connect_handler(),
-			   disconnect_handler(),
-			   add_handler_handler(),
-			   del_handler_handler(),
-			   event_handler_handler(),
-			   exit_handler(),
-			   dump_handler()
-			   |  Handlers], Dict1),
-    Dict3 = do_init(Dict2),
-    loop(ordsets:new(), Dict3, infinity).
+-spec fields() -> [field_decl()].
+
+fields() ->
+    [
+     {'@type',         undefined},
+     {'@type_list',    []},
+     {'@name',         undefined},
+     {'@exit',         false},
+     {'@auto_exit',    false},
+     {'@dump',         false},
+     {'@child',        undefined},
+     {'@parent',       undefined},
+     {'@init',         undefined},      %% init handler
+     {'@terminate',    undefined}, %% termination handler
+     {'@add_field',    undefined},
+     {'@del_field',    undefiend},
+     {'@connect',      undefined},
+     {'@disconnect',   undefined},
+     {'@add_handler',  undefined},
+     {'@del_handler',  undefined},
+     {'@event',        undefined},
+     {'@error_handler',undefined}
+    ].
+
+-spec handlers() -> [handler()].
+		       
+handlers() ->
+    [
+     add_field_handler(),
+     del_field_handler(),
+     connect_handler(),
+     disconnect_handler(),
+     add_handler_handler(),
+     del_handler_handler(),
+     event_handler_handler(),
+     exit_handler(),
+     dump_handler()
+    ].
+    
+%%--------------------------------------------------------------------
+%% @doc
+%%     Enter the reactor main loop
+%% @end
+%%--------------------------------------------------------------------
+-spec enter_loop(Types::[atom()], Args::[{field_name(),term()}]) ->
+			no_return.
+
+enter_loop(Types, Args) ->
+    D0 = dict:new(),
+    %% insert all fields from module callbacks
+    D1 = lists:foldl(
+	   fun(Mod, Di) ->
+		   add_fields_(Mod:fields(), Di)
+	   end, D0, [?MODULE | Types]),
+    %% and fields from arguments
+    D2 = add_fields_(proplists:get_value(fields,Args,[]), D1),
+    %% get main type 
+    Type = case Types of
+	       [] -> undefined;
+	       [Type0] -> Type0;
+	       _ -> lists:last(Types)
+	   end,
+    %% set all arguments
+    D3 = lists:foldl(
+	   fun({fields,_}, Di) -> Di;
+	      ({handlers,_}, Di) -> Di;
+	      ({Field,Value},Di) ->
+		   set_value_(Field,Value,Di)
+	   end, D2, [{'@type',Type},{'@type_list',Types}|Args]),
+    %% insert all handlers
+    D4 = lists:foldl(
+	   fun(Mod, Di) ->
+		   add_handlers_(Mod:handlers(), Di)
+	   end, D3, [?MODULE | Types]),
+    D5 = add_handlers_(proplists:get_value(handlers,Args,[]), D4),
+    D6 = do_init(D5),
+    loop(ordsets:new(), D6, infinity).
 
 add_field_handler() ->
     %% @add_field :: atom() | {atom(),term()}
@@ -113,8 +169,8 @@ exit_handler() ->
     %% @exit :: term
     {exit_handler, 1,[],['@exit'],
      fun(false) -> ok;
-	(Reason) -> 
-	     %% FIXME: call @terminate 
+	(Reason) ->
+	     do_terminate(get(?REACTOR_DICT)),
 	     exit(Reason)
      end}.
 
@@ -127,19 +183,26 @@ dump_handler() ->
 	     false
      end}.
 
-id(Dict) ->
-    get_value_('@id', Dict).
+type(Dict) ->
+    get_value_('@type', Dict).
 
-%% Try to execte @init script!
+%% Execute @init handler
 do_init(IDict0) ->
-    HSet = dict:fetch({handset,'@init'}, IDict0),
+    do_execute(IDict0, '@init').
+
+%% Execte @terminate handler
+do_terminate(IDict0) ->
+    do_execute(IDict0, '@terminate').
+
+do_execute(IDict0, XField) ->
+    HSet = dict:fetch({handset,XField}, IDict0),
     Handlers = lists:map(fun({_Prio,ID}) ->
 				 dict:fetch({handler,ID}, IDict0)
 			 end, ordsets:to_list(HSet)),
     put(?REACTOR_DICT, IDict0),
-    _Updated = execute_handlers(Handlers, ordsets:from_list(['@init'])),
+    _Updated = execute_handlers(Handlers, ordsets:from_list([XField])),
     IDict1 = get(?REACTOR_DICT),
-    IDict1.
+    IDict1.    
 
 %%    
 %% Main loop
@@ -150,14 +213,14 @@ loop(Changed,Dict,Wait) ->
 	{reactor_signal,_Src,_SrcField,Field,Value} ->
 	    %% FIXME: do something nice with _Src and _SrcField,
 	    %% like: if Field does not exist then report 
-	    %% set(_Src, '@error_handler', {enoent,self(),Field})
+	    %% signal(_Src, '@error_handler', {enoent,self(),Field})
 	    %% Value could be stored like: {Src,SrcField,Value} to be
 	    %% able to trace where value came from...
 	    %%
 	    Dict1 = enq_value_(Field, Value, Dict),
 	    Changed1 = ordsets:add_element(Field, Changed),
 	    ?dbg("~p[~s]: input from (~w,~w), ~w = ~w\n", 
-		 [self(),id(Dict),_Src,_SrcField,Field,Value]),
+		 [self(),type(Dict),_Src,_SrcField,Field,Value]),
 	    loop(Changed1,Dict1,0);
 	
 	{'DOWN',Ref,process,Dst,_Reason} ->
@@ -166,7 +229,7 @@ loop(Changed,Dict,Wait) ->
 		    loop(Changed,Dict,Wait);
 		{ok,{F,G}} ->
 		    ?dbg("~w[~s]: auto disconnect ~w:~w => ~w:~w (~p)\n",
-			 [self(),id(Dict),self(),F,Dst,G,_Reason]),
+			 [self(),type(Dict),self(),F,Dst,G,_Reason]),
 		    List = list_channel_(F, Dict),
 		    {_,Dict1} = del_from_channel_(F, {Dst,G}, List, Dict),
 		    loop(Changed,Dict1,Wait)
@@ -175,7 +238,7 @@ loop(Changed,Dict,Wait) ->
 	Event ->
 	    Dict1 = enq_value_('@event', Event, Dict),
 	    Changed1 = ordsets:add_element('@event', Changed),
-	    ?dbg("~p[~s]: event = ~p\n", [self(),id(Dict),Event]),
+	    ?dbg("~p[~s]: event = ~p\n", [self(),type(Dict),Event]),
 	    loop(Changed1,Dict1,0)
 	    
     after Wait ->
@@ -210,9 +273,12 @@ is_field_(Field, Dict) ->
 
 %% called from handler!
 add_field_(FieldValue) ->
-    {Res,Dict} = add_field_(FieldValue, get(?REACTOR_DICT)),
+    Dict = add_field_(FieldValue, get(?REACTOR_DICT)),
     put(?REACTOR_DICT, Dict),
-    Res.
+    ok.
+
+add_fields_(Fs, Dict) ->
+    lists:foldl(fun add_field_/2, Dict, Fs).
 
 %% Add a field to the dictionary
 add_field_({Field,Value}, Dict) ->
@@ -225,21 +291,22 @@ add_field_(Field, Default, Dict) ->
 	false ->
 	    Dict1 = init_value_(Field, Default, Dict),
 	    Dict2 = init_channel_(Field, Dict1),
-	    Dict3 = dict:store({handset, Field}, ordsets:new(), Dict2),
-	    {true,Dict3};
+	    dict:store({handset, Field}, ordsets:new(), Dict2);
 	true ->
-	    {false,Dict}
+	    io:format("warning: field ~p already defined\n", [Field]),
+	    Dict
     end.
     
 del_field_(Field) ->
-    {Res,Dict} = del_field_(Field, get(?REACTOR_DICT)),
+    Dict = del_field_(Field, get(?REACTOR_DICT)),
     put(?REACTOR_DICT, Dict),
-    Res.
+    ok.
 
 del_field_(Field, Dict) ->
     case is_field_(Field, Dict) of
 	false ->
-	    {false,Dict};
+	    io:format("warning: field ~p is not defined\n", [Field]),
+	    Dict;
 	true ->
 	    lists:foreach(
 	      fun({{_Dst,_G},Mon}) ->
@@ -248,8 +315,7 @@ del_field_(Field, Dict) ->
 	      end, list_channel_(Field, Dict)),
 	    Dict1 = erase_value_(Field, Dict),
 	    Dict2 = erase_channel_(Field, Dict1),
-	    Dict3 = dict:erase({handset,Field}, Dict2),
-	    {true,Dict3}
+	    dict:erase({handset,Field}, Dict2)
     end.
 
 
@@ -290,17 +356,17 @@ add_handler_(H={Hid,Prio,OFs,IFs,Body},Dict) ->
 		    end;
 	       true ->
 		    io:format("~w[~s]: error: reactor body is not a function/~w\n",
-			 [self(),id(Dict),N]),
+			 [self(),type(Dict),N]),
 		    Dict
 	    end;
 	{OFs1,IFs1} ->
 	    io:format("~w[~s]: error: reactor fields ~p not defined\n",
-		      [self(),id(Dict),OFs1++IFs1]),
+		      [self(),type(Dict),OFs1++IFs1]),
 	    Dict
     end;
 add_handler_(H,Dict) ->
     io:format("~w[~s]: error: malformed handler ~p\n",
-	      [self(),id(Dict),H]),
+	      [self(),type(Dict),H]),
     Dict.
 
 del_handler_(Hid) ->
@@ -388,7 +454,7 @@ connect_(Field, Dst, DstField) ->
     case is_field_(Field,Dict) of
 	false ->
 	    ?dbg("~w[~s]: connect_ ~s is not a field\n", 
-		 [self(),id(Dict),Field]),
+		 [self(),type(Dict),Field]),
 	    false;
 	true ->
 	    Dict1 = handle_connect(Field,Dst,DstField,Dict),
@@ -399,16 +465,15 @@ connect_(Field, Dst, DstField) ->
 %% Connect "subscriber" field 
 handle_connect(Field, Dst, DstField, Dict) ->
     List = list_channel_(Field, Dict),
-    ID   = id(Dict),
     Elem = {Dst,DstField},
     case lists:keymember(Elem,1,List) of
 	true ->
 	    io:format("~w[~s]: already connected ~p => ~p:~p\n",
-		      [self(), ID, Field, Dst, DstField]),
+		      [self(), type(Dict), Field, Dst, DstField]),
 	    Dict;
 	false ->
 	    ?dbg("~w[~s]: connected: ~p => ~p:~p\n", 
-		 [self(), ID, Field, Dst,DstField]),
+		 [self(), type(Dict), Field, Dst,DstField]),
 	    {_Ref,Dict1} = add_to_channel_(Field, Elem, List, Dict),
 	    Dict1
     end.
@@ -418,7 +483,7 @@ disconnect_(Field, Dst, DstField) ->
     case is_field_(Field,Dict) of
 	false ->
 	    ?dbg("~w[~s]: disconnect_ ~s is not a field\n", 
-		 [self(),id(Dict),Field]),
+		 [self(),type(Dict),Field]),
 	    false;
 	true ->
 	    Dict1 = handle_disconnect(Field,Dst,DstField,Dict),
@@ -432,11 +497,11 @@ handle_disconnect(Field, Dst, DstField, Dict) ->
     case del_from_channel_(Field, Elem, List, Dict) of
 	{false,Dict1} ->
 	    ?dbg("~w[~s]: not connected ~p => ~p:~p\n",
-		 [self(), id(Dict), Field, Dst, DstField]),
+		 [self(), type(Dict), Field, Dst, DstField]),
 	    Dict1;
 	{Ref,Dict1} ->
 	    ?dbg("~w[~s]: diconnected: ~p => ~p:~p\n", 
-		 [self(), id(Dict1), Field, Dst,DstField]),
+		 [self(), type(Dict1), Field, Dst,DstField]),
 	    erlang:demonitor(Ref,[flush]),
 	    Dict1
     end.
@@ -446,7 +511,7 @@ handle_disconnect(Field, Dst, DstField, Dict) ->
 %%
 handle_reaction(Changed0,IDict0) ->
     ?dbg("~w[~s]: handle_reaction: changed ~p\n", 
-	 [self(),id(IDict0),ordsets:to_list(Changed0)]),
+	 [self(),type(IDict0),ordsets:to_list(Changed0)]),
     %% find all handlers for the Changed set
     PrioIDSet =
 	ordsets:fold(
@@ -476,7 +541,7 @@ handle_reaction(Changed0,IDict0) ->
 			  {ordsets:del_element(F,Set),Dict1}
 		  end
 	  end, {Changed0,IDict0}, Changed0),
-    ?dbg("~w[~s]: still changed ~w\n",[self(),id(IDict1),Changed1]),
+    ?dbg("~w[~s]: still changed ~w\n",[self(),type(IDict1),Changed1]),
 
     %%
     %% Ugly hack, set current version of IDict in process dictionary
@@ -521,14 +586,14 @@ handle_reaction(Changed0,IDict0) ->
 	  fun(Field,Value,IDict) ->
 		  List = list_channel_(Field,IDict),
 		  ?dbg("~w[~s]: propagte ~w = ~w : ~w\n", 
-		       [self(),id(IDict),Field,Value,List]),
+		       [self(),type(IDict),Field,Value,List]),
 		  lists:foreach(
 		    fun({{Dst,DstField},_Mon}) ->
 			    Dst ! {reactor_signal,self(),Field,DstField,Value}
 		    end, List),
 		  %% poke "output" as single value items - can not build queue
 		  %% this should update current value!?
-		  assign_value_(Field,Value,IDict)
+		  set_value_(Field,Value,IDict)
 	  end, IDict2, Updated2),
 
     {Changed1,IDict3}.
@@ -539,14 +604,14 @@ execute_handlers(Handlers, Changed0) ->
       fun(_H={HID,_Prio,OFs,IFs,Body},UDict) ->
 	      %% if none of IFs has changed then skip
 	      HDict = get(?REACTOR_DICT),
-	      ?dbg("~w[~s]: check ~p\n", [self(),id(HDict),_H]),
+	      ?dbg("~w[~s]: check ~p\n", [self(),type(HDict),_H]),
 	      case IFs -- ChangedList of
 		  IFs ->
 		      UDict;
 		  _ ->
 		      Args = fields_values(IFs,HDict),
 		      ?dbg("~w[~s]: execute ~w changed=~w\n",
-			   [self(),id(HDict),{HID,_Prio,OFs,IFs,Args},
+			   [self(),type(HDict),{HID,_Prio,OFs,IFs,Args},
 			    ChangedList]),
 		      put(?REACTOR_HANDLER, HID),
 		      try apply(Body, Args) of
@@ -554,8 +619,14 @@ execute_handlers(Handlers, Changed0) ->
 			      set_output_values_(OFs,Value,UDict)
 		      catch
 			  error:Reason ->
-			      io:format("~w[~s]: Reactor ~w crash ofs=~p reason=~p\n",
-					[self(),id(HDict),HID,OFs,Reason]),
+			      Trace = erlang:get_stacktrace(),
+			      Es = format_stacktrace(Trace),
+			      io:format("~w[~s]: Reactor ~w crash ~p/~w, ~p\n",
+					[self(),type(HDict),HID,IFs,Args,
+					 Reason]),
+			      foreach(fun(E) ->
+					      io:format("  ~s\n", [E])
+				      end, Es),
 			      UDict
 		      end
 	      end
@@ -631,15 +702,29 @@ erase_value_(Field, Dict) ->
     dict:erase({value,Field}, Dict).
 
 %% maybe update last value ?
-assign_value(Field, Value) ->
-    Dict1 = assign_value_(Field, Value, get(?REACTOR_DICT)),
+%%--------------------------------------------------------------------
+%% @doc
+%%    Set current input value from withing a reactor.
+%% @end
+%%--------------------------------------------------------------------
+-spec set_value(Field::field_name(),Value::term()) -> term().
+
+set_value(Field, Value) ->
+    Dict1 = set_value_(Field, Value, get(?REACTOR_DICT)),
     put(?REACTOR_DICT, Dict1),
     Value.
 
-assign_value_(Field, Value, Dict) ->
-    ?dbg("~w: assign_value ~w to ~w\n",[self(),Field,Value]),
+set_value_(Field, Value, Dict) ->
+    ?dbg("~w: set_value ~w to ~w\n",[self(),Field,Value]),
     {_Value,Queue} = dict:fetch({value,Field},Dict),
     dict:store({value, Field},{Value,Queue},Dict).
+
+%%--------------------------------------------------------------------
+%% @doc
+%%    Fetch field value from within a reactor.
+%% @end
+%%--------------------------------------------------------------------
+-spec get_value(Field::field_name()) -> term().
 
 get_value(Field) when is_atom(Field) ->
     get_value_(Field, get(?REACTOR_DICT)).
@@ -672,9 +757,40 @@ deq_value_(Field, Dict) ->
 ordsets_is_empty(Set) ->
     Set =:= ordsets:new().
 
+format_stacktrace(Ts) ->
+    MaxDepth = 10,
+    MaxLine  = 160,
+    format_stacktrace(Ts,MaxDepth,MaxLine).
 
+format_stacktrace([_|_],0,_) ->
+    ["..."];
+format_stacktrace([{M,F,A}|Ts],D,MaxLine) ->
+    Args = format_args(A,MaxLine),
+    E = list_to_binary(io_lib:format("~w:~w~s", [M,F,Args])),
+    [E | format_stacktrace(Ts,D-1,MaxLine)];
+format_stacktrace([{M,F,A,L}|Ts],D,MaxLine) ->
+    Args = format_args(A,MaxLine),
+    File = proplists:get_value(file, L, "*"),
+    Line = proplists:get_value(line, L, 0),
+    E = list_to_binary(io_lib:format("~s:~w: ~w:~w/~s", 
+				     [File,Line,M,F,Args])),
+    [E | format_stacktrace(Ts,D,MaxLine)];
+format_stacktrace([],_D,_MaxLine) ->
+    [].
 
+format_args(A,_Max) when is_integer(A) ->
+    ["/",integer_to_list(A)];
+format_args(A,Max) when is_list(A) ->
+    ["(",format_arg_list(A,Max),")"].
 
-    
+format_arg_list([],_Max) ->
+    "";
+format_arg_list(_As,Max) when Max =< 0 ->
+    "...";
+format_arg_list([A],_Max) ->
+    io_lib:format("~w", [A]);
+format_arg_list([A|As],Max) ->
+    Fmt = list_to_binary(io_lib:format("~w",[A])),
+    Max1 = Max - byte_size(Fmt),
+    [Fmt,",",format_arg_list(As,Max1)].
 
-    

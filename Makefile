@@ -1,3 +1,5 @@
+.PHONY:	compile doc all
+
 all:	compile
 
 compile:

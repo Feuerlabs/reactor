@@ -7,24 +7,28 @@
 
 -module(reactor_format).
 
-
+-behaviour(reactor).
+-export([fields/0, handlers/0]).
 -export([create/2]).
 
-create(ID, Format) ->
-    reactor:create(ID, 
-		   [
-		    {input, undefined}
-		   ],
-		   
-		   [
-		    {input_handler,
-		     10, void, [input],
-		     fun(Input) ->
-			     io:format(Format, [Input])
-		     end }
-		   ]
-		   ).
+fields() ->
+    [
+     {format, ""},
+     {input, undefined}    
+    ].
 
+handlers() ->
+    [
+     {input_handler,
+      10, void, [input,format],
+      fun(Input,Format) ->
+	      io:format(Format, [Input])
+      end 
+     }
+    ].
+
+create(Name, Format) ->
+    reactor:create([?MODULE], [{'@name',Name},{format,Format}]).
 		   
 			     
 		   

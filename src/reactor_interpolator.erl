@@ -7,9 +7,31 @@
 
 -module(reactor_interpolator).
 
--export([create/2, create/3, create_integer/2]).
+-behaviour(reactor).
+-export([fields/0, handlers/0]).
+-export([create/2]).
+
+-export([create/3, create_integer/2]).
 -export([search_/2]).
 -export([interpolate_/2, interpolate_/3]).
+
+fields() ->
+    [
+     {input, 0.0},
+     {output, undefined},
+     {points, {}},
+     {vf, fun(V) -> V end}
+    ].
+
+handlers() ->
+    [
+     {input_handler, 
+      10, output, [input,points,vf],
+      fun(S,Points,Vf) ->
+	      interpolate_(S, Points, Vf)
+      end
+     }
+    ].
 
 %%
 %% Create an interpolator. Points is a tuple of pairs on form
@@ -17,29 +39,15 @@
 %% Where 0.0 <= T0 < T1 .. < Tn <= 1.0
 %% And Vi are scalar or vector of numbers
 %%
-create(ID, Points) when is_tuple(Points) ->
-    create(ID, Points, fun(V) -> V end).
-
-create(ID, Points, Vf) when is_tuple(Points), is_function(Vf,1) ->
-    reactor:create(
-      ID,
-      [
-       {input, 0.0},
-       {output, undefined}
-      ],
-      
-      [
-       {input_handler, 
-	10, output, [input],
-	fun(S) ->
-		interpolate_(S, Points, Vf)
-	end}
-      ]).
+create(Name,Points) when is_tuple(Points) ->
+    create(Name, Points, fun(V) -> V end).
 
 %% interpolator returning integer values only
-create_integer(ID, Points) ->
-    create(ID, Points, fun(V) -> trunc(V) end).
+create_integer(Name,Points) ->
+    create(Name,Points,fun(V) -> trunc(V) end).
 
+create(Name,Points, Vf) when is_tuple(Points), is_function(Vf,1) ->
+    reactor:create([?MODULE],[{'@name',Name},{points,Points},{vf, Vf}]).
 
 interpolate_(S, Tuple) ->
     interpolate_(S, Tuple, fun(V) -> V end).
