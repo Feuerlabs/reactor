@@ -40,16 +40,35 @@
 
 %% FIXME: import instead
 %% -type void() :: 'ok'.
-%% -type reactor() :: pid().
--type handler_id() :: term().
+-type reactor() :: pid().
+-type handler_id()   :: term().
 -type handler_prio() :: term().
--type field_name() :: atom().
+-type field_name()   :: atom().
 -type field_decl() :: field_name() | {field_name(), term()}.
 -type handler() :: {Hid::handler_id(),Prio::handler_prio(),
 		    OFs::'void' | field_name() | [field_name()],
 		    IFs::[field_name()], Body::fun()}.
 
--spec fields() -> [field_decl()].
+-spec fields() -> [
+		   {'@type',      atom()} |
+		   {'@type_list', [atom()]} |
+		   {'@name',      atom()} |
+		   {'@exit',      boolean()} |
+		   {'@auto_exit', boolean()} |
+		   {'@dump',      boolean()} |
+		   {'@child',     any()} |
+		   {'@parent',    any()} |
+		   {'@init',         any()} |   %% init handler
+		   {'@terminate',    any()} |   %% termination handler
+		   {'@add_field',    field_decl()} |
+		   {'@del_field',    field_name()} |
+		   {'@connect',      {field_name(),reactor(),field_name()}} |
+		   {'@disconnect',   {field_name(),reactor(),field_name()}} |
+		   {'@add_handler',  handler()} |
+		   {'@del_handler',  handler_id()} |
+		   {'@event',        any()} |
+		   {'@error_handler',any()}].
+
 
 fields() ->
     [
@@ -61,8 +80,8 @@ fields() ->
      {'@dump',         false},
      {'@child',        undefined},
      {'@parent',       undefined},
-     {'@init',         undefined},      %% init handler
-     {'@terminate',    undefined}, %% termination handler
+     {'@init',         undefined},   %% init handler
+     {'@terminate',    undefined},   %% termination handler
      {'@add_field',    undefined},
      {'@del_field',    undefiend},
      {'@connect',      undefined},
