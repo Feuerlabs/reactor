@@ -1,6 +1,6 @@
 {application, reactor,
  [{description, "Reactor core"},
-  {vsn, "1.0"},
+  {vsn, git},
   {modules, [reactor]},
   {registered, []},
   {applications,[kernel,stdlib]}
